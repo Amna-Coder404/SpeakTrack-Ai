@@ -8,7 +8,8 @@ export default defineSchema({
         name: v.string(),
         email: v.string(),
         imageUrl: v.optional(v.string()),
-        createdAt: v.number(),
+        createdAt: v.float64(),
+        updatedAt: v.optional(v.float64()),
     }).index('by_clerk_id', ['clerkId']),
 
     sessions: defineTable({
