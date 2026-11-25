@@ -1,35 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-    ActivityIndicator,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
-} from 'react-native';
-
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { useSSO } from '@clerk/expo';
 
+import Orb from '../../components/Orb';
+import { colors, fonts } from '../../lib/theme';
+
 WebBrowser.maybeCompleteAuthSession();
 
-const COLORS = {
-    primary: '#6845D9',
-    background: '#FAF9FF',
-    surface: '#FFFFFF',
-    text: '#19172B',
-    secondary: '#77738A',
-    border: '#ECE9F5',
-    lightPurple: '#F0ECFF',
-    danger: '#D94848',
-};
-
-// Speeds up the browser opening on Android.
 function useWarmUpBrowser() {
     useEffect(() => {
-        if (Platform.OS !== 'android') return;
+        if (Platform.OS !== 'android') return undefined;
         WebBrowser.warmUpAsync();
         return () => {
             WebBrowser.coolDownAsync();
@@ -41,31 +25,24 @@ export default function WelcomeScreen() {
     useWarmUpBrowser();
 
     const { startSSOFlow } = useSSO();
-    const [isLoading, setIsLoading] = useState(false);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    const handleGoogleSignIn = useCallback(async () => {
+    const signInWithGoogle = useCallback(async () => {
         try {
             setError('');
-            setIsLoading(true);
-
-            const redirectUrl = Linking.createURL('/');
-            console.log('Redirect URL:', redirectUrl);
+            setLoading(true);
 
             const result = await startSSOFlow({
                 strategy: 'oauth_google',
-                redirectUrl,
+                redirectUrl: Linking.createURL('/'),
             });
-
             console.log('SSO result:', {
                 createdSessionId: result.createdSessionId,
                 authSession: result.authSessionResult?.type,
-                signInStatus: result.signIn?.status,
-                signUpStatus: result.signUp?.status,
             });
 
             const { createdSessionId, setActive } = result;
-
             if (createdSessionId && setActive) {
                 await setActive({ session: createdSessionId });
                 router.replace('/home');
@@ -76,175 +53,130 @@ export default function WelcomeScreen() {
             console.error('Google sign in failed:', JSON.stringify(err, null, 2));
             setError(err?.errors?.[0]?.message || 'Something went wrong. Please try again.');
         } finally {
-            setIsLoading(false);
+            setLoading(false);
         }
     }, [startSSOFlow]);
 
     return (
-        <View style={styles.container}>
-            <View style={styles.top}>
-                <View style={styles.logo}>
-                    <Text style={styles.logoEmoji}>🎙️</Text>
+        <View style={s.container}>
+            <StatusBar style="light" />
+
+            <View style={s.brandRow}>
+                <View style={s.bars}>
+                    <View style={[s.bar, { height: 9 }]} />
+                    <View style={[s.bar, { height: 17 }]} />
+                    <View style={[s.bar, { height: 12 }]} />
                 </View>
-
-                <Text style={styles.brand}>SpeakTrack</Text>
-                <Text style={styles.tagline}>Speak. Track. Improve.</Text>
-
-                <Text style={styles.description}>
-                    Practice English with AI conversations, get instant
-                    corrections, and watch your speaking improve every day.
-                </Text>
-
-                <View style={styles.features}>
-                    <Text style={styles.feature}>💬  AI voice conversations</Text>
-                    <Text style={styles.feature}>✍️  Grammar corrections</Text>
-                    <Text style={styles.feature}>📚  Vocabulary tracking</Text>
-                    <Text style={styles.feature}>📈  Speaking progress</Text>
-                </View>
+                <Text style={s.brand}>SpeakTrack</Text>
             </View>
 
-            <View style={styles.bottom}>
-                {!!error && <Text style={styles.error}>{error}</Text>}
+            <View style={s.orbWrap}>
+                <Orb size={165} pulse />
+            </View>
+
+            <View>
+                <Text style={s.headline}>Speak.</Text>
+                <Text style={s.headline}>Track.</Text>
+                <Text style={[s.headline, s.headlineAccent]}>Improve.</Text>
+                <Text style={s.sub}>
+                    Have real conversations with an AI partner, then see exactly how your English is changing.
+                </Text>
+
+                {!!error && <Text style={s.error}>{error}</Text>}
 
                 <Pressable
-                    style={({ pressed }) => [
-                        styles.googleButton,
-                        pressed && styles.pressed,
-                        isLoading && styles.disabled,
-                    ]}
-                    onPress={handleGoogleSignIn}
-                    disabled={isLoading}
+                    style={({ pressed }) => [s.primary, pressed && s.pressed, loading && s.disabled]}
+                    onPress={signInWithGoogle}
+                    disabled={loading}
                 >
-                    {isLoading ? (
-                        <ActivityIndicator color="#FFFFFF" />
+                    {loading ? (
+                        <ActivityIndicator color={colors.dark} />
                     ) : (
                         <>
-                            <Text style={styles.googleG}>G</Text>
-                            <Text style={styles.googleText}>Continue with Google</Text>
+                            <View style={s.gBadge}>
+                                <Text style={s.gText}>G</Text>
+                            </View>
+                            <Text style={s.primaryText}>Continue with Google</Text>
                         </>
                     )}
                 </Pressable>
 
-                <Text style={styles.terms}>
-                    By continuing, you agree to our Terms and Privacy Policy.
-                </Text>
+                <Pressable
+                    style={({ pressed }) => [s.secondary, pressed && s.pressed, loading && s.disabled]}
+                    onPress={signInWithGoogle}
+                    disabled={loading}
+                >
+                    <Text style={s.secondaryText}>I already have an account</Text>
+                </Pressable>
+
+                <Text style={s.terms}>By continuing you agree to the Terms & Privacy Policy</Text>
             </View>
         </View>
     );
 }
 
-const styles = StyleSheet.create({
+const s = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: COLORS.background,
+        backgroundColor: colors.dark,
         paddingHorizontal: 24,
-        paddingTop: 90,
-        paddingBottom: 40,
+        paddingTop: 64,
+        paddingBottom: 34,
         justifyContent: 'space-between',
     },
-
-    top: {
-        alignItems: 'center',
+    brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    bars: { flexDirection: 'row', alignItems: 'center', gap: 2.5 },
+    bar: { width: 3.5, borderRadius: 2, backgroundColor: colors.accent },
+    brand: { color: colors.onDark, fontSize: 18, fontWeight: '700' },
+    orbWrap: { alignItems: 'center', marginTop: 10 },
+    headline: {
+        fontFamily: fonts.serif,
+        fontSize: 54,
+        lineHeight: 54,
+        color: colors.onDark,
     },
-
-    logo: {
-        width: 84,
-        height: 84,
-        borderRadius: 28,
-        backgroundColor: COLORS.lightPurple,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    logoEmoji: {
-        fontSize: 40,
-    },
-
-    brand: {
-        marginTop: 22,
-        fontSize: 34,
-        fontWeight: '800',
-        color: COLORS.primary,
-    },
-
-    tagline: {
-        marginTop: 6,
-        fontSize: 14,
-        fontWeight: '600',
-        color: COLORS.secondary,
-    },
-
-    description: {
-        marginTop: 22,
+    headlineAccent: { fontFamily: fonts.serifItalic, color: colors.accent },
+    sub: {
+        color: colors.mutedOnDark,
         fontSize: 15,
-        lineHeight: 24,
-        textAlign: 'center',
-        color: COLORS.secondary,
+        lineHeight: 22,
+        marginTop: 14,
+        marginBottom: 22,
+        maxWidth: 300,
     },
-
-    features: {
-        marginTop: 30,
-        alignSelf: 'stretch',
-        backgroundColor: COLORS.surface,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        padding: 20,
-        gap: 14,
-    },
-
-    feature: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: COLORS.text,
-    },
-
-    bottom: {
-        alignItems: 'center',
-    },
-
-    error: {
-        color: COLORS.danger,
-        fontSize: 13,
-        textAlign: 'center',
-        marginBottom: 14,
-    },
-
-    googleButton: {
-        alignSelf: 'stretch',
-        backgroundColor: COLORS.primary,
+    error: { color: '#FF8E7A', fontSize: 13, marginBottom: 12 },
+    primary: {
+        backgroundColor: colors.onDark,
         borderRadius: 16,
-        paddingVertical: 17,
+        height: 54,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: 10,
     },
-
-    googleG: {
-        color: '#FFFFFF',
-        fontSize: 18,
-        fontWeight: '800',
-        marginRight: 10,
+    gBadge: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#DADCE0',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-
-    googleText: {
-        color: '#FFFFFF',
-        fontSize: 16,
-        fontWeight: '700',
+    gText: { color: '#4285F4', fontWeight: '800', fontSize: 14 },
+    primaryText: { color: colors.dark, fontSize: 16, fontWeight: '700' },
+    secondary: {
+        marginTop: 10,
+        height: 54,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: colors.darkBorder,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-
-    pressed: {
-        opacity: 0.85,
-    },
-
-    disabled: {
-        opacity: 0.7,
-    },
-
-    terms: {
-        marginTop: 16,
-        fontSize: 12,
-        color: COLORS.secondary,
-        textAlign: 'center',
-    },
-});
+    secondaryText: { color: colors.onDark, fontSize: 15, fontWeight: '600' },
+    terms: { color: colors.mutedOnDark, fontSize: 11.5, textAlign: 'center', marginTop: 16 },
+    pressed: { opacity: 0.85 },
+    disabled: { opacity: 0.6 },
+})

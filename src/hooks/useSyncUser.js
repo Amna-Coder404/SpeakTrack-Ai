@@ -3,6 +3,7 @@ import { useUser } from '@clerk/expo';
 import { useConvexAuth, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 
+// Saves the signed-in Clerk user into Convex (once per app start).
 export default function useSyncUser() {
     const { user, isLoaded } = useUser();
     const { isAuthenticated } = useConvexAuth();
