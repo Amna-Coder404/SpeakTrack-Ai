@@ -4,14 +4,16 @@ import {
     View,
     Text,
     Pressable,
-    ScrollView,
-    StyleSheet,
+    ScrollView, ActivityIndicator
 } from 'react-native';
 import { Redirect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@clerk/expo';
 
 import { useSpeaking } from '../hooks/useSpeaking';
+import styles from '../styles/speaking.style';
+import TypingDots from '../components/TypingDots';
 
 export default function SpeakingScreen() {
     const { isSignedIn, isLoaded } = useAuth();
@@ -28,8 +30,10 @@ export default function SpeakingScreen() {
         handleEnd,
     } = useSpeaking();
 
-    if (!isLoaded) return null;
+    const isThinking = status === 'thinking';
+    const isListening = status === 'listening';
 
+    if (!isLoaded) return null;
     if (!isSignedIn) {
         return <Redirect href="/(auth)/welcome" />;
     }
@@ -45,18 +49,31 @@ export default function SpeakingScreen() {
 
     return (
         <View style={styles.container}>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
 
             <View style={styles.header}>
-                <Text style={styles.title}>SpeakTrack</Text>
-                <Text style={styles.timer}>{formatTime(seconds)}</Text>
+                <View>
+                    <Text style={styles.title}>SpeakTrack</Text>
+                    <Text style={styles.subtitle}>Your speaking session</Text>
+                </View>
+
+                <View style={styles.timerContainer}>
+                    <View style={styles.timerDot} />
+                    <Text style={styles.timer}>{formatTime(seconds)}</Text>
+                </View>
             </View>
 
-            <Text style={styles.status}>{status.toUpperCase()}</Text>
+            <View style={styles.statusContainer}>
+                <View style={styles.statusDot} />
+                <Text style={styles.status}>
+                    {isThinking ? 'THINKING...' : isListening ? 'LISTENING...' : status.toUpperCase()}
+                </Text>
+            </View>
 
             <ScrollView
                 style={styles.chat}
                 contentContainerStyle={styles.chatContent}
+                showsVerticalScrollIndicator={false}
             >
                 {messages.map((message) => (
                     <View
@@ -68,118 +85,81 @@ export default function SpeakingScreen() {
                                 : styles.aiMessage,
                         ]}
                     >
-                        <Text style={styles.messageText}>{message.text}</Text>
+                        <Text style={styles.messageText}>
+                            {message.text}
+                        </Text>
                     </View>
                 ))}
 
                 {!!liveText && (
-                    <Text style={styles.liveText}>{liveText}</Text>
+                    <View style={styles.liveContainer}>
+                        <Text style={styles.liveLabel}>LIVE TRANSCRIPTION</Text>
+                        <Text style={styles.liveText}>{liveText}</Text>
+                    </View>
+                )}
+                {isThinking && (
+                    <View style={[styles.message, styles.aiMessage]}>
+                        <TypingDots />
+                    </View>
+                )}
+                {messages.length === 0 && !liveText && (
+                    <View style={styles.emptyContainer}>
+                        <Ionicons
+                            name="chatbubble-ellipses-outline"
+                            size={30}
+                            color="#E96D4A"
+                        />
+                        <Text style={styles.emptyTitle}>
+                            Start speaking
+                        </Text>
+                        <Text style={styles.emptyText}>
+                            Your conversation will appear here.
+                        </Text>
+                    </View>
                 )}
             </ScrollView>
 
             {!!error && <Text style={styles.error}>{error}</Text>}
 
             <View style={styles.controls}>
-                <Pressable style={styles.button} onPress={handleMute}>
-                    <Text style={styles.buttonText}>
+                <Pressable
+                    style={styles.secondaryButton}
+                    onPress={handleMute}
+                >
+                    <Ionicons
+                        name={muted ? 'volume-mute' : 'volume-high'}
+                        size={23}
+                        color="#171613"
+                    />
+                    <Text style={styles.secondaryButtonText}>
                         {muted ? 'Unmute' : 'Mute'}
                     </Text>
                 </Pressable>
 
-                <Pressable style={styles.micButton} onPress={handleMic}>
-                    <Text style={styles.buttonText}>Mic</Text>
+                <Pressable
+                    style={styles.micButton}
+                    onPress={handleMic}
+                >
+                    <Ionicons
+                        name="mic"
+                        size={29}
+                        color="#FFFFFF"
+                    />
                 </Pressable>
 
-                <Pressable style={styles.button} onPress={handleEnd}>
-                    <Text style={styles.buttonText}>End</Text>
+                <Pressable
+                    style={styles.endButton}
+                    onPress={handleEnd}
+                >
+                    <Ionicons
+                        name="call"
+                        size={23}
+                        color="#FFFFFF"
+                        style={{ transform: [{ rotate: '135deg' }] }}
+                    />
+                    <Text style={styles.endButtonText}>End</Text>
                 </Pressable>
             </View>
         </View>
     );
 }
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#10111B',
-        paddingTop: 55,
-        paddingHorizontal: 20,
-    },
-    header: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    title: {
-        color: '#FFFFFF',
-        fontSize: 23,
-        fontWeight: '700',
-    },
-    timer: {
-        color: '#FFFFFF',
-        fontSize: 18,
-    },
-    status: {
-        color: '#A78BFA',
-        textAlign: 'center',
-        marginTop: 30,
-        fontWeight: '600',
-    },
-    chat: {
-        flex: 1,
-        marginTop: 25,
-    },
-    chatContent: {
-        gap: 14,
-        paddingBottom: 20,
-    },
-    message: {
-        padding: 14,
-        borderRadius: 16,
-        maxWidth: '85%',
-    },
-    aiMessage: {
-        alignSelf: 'flex-start',
-        backgroundColor: '#25263A',
-    },
-    userMessage: {
-        alignSelf: 'flex-end',
-        backgroundColor: '#6941C6',
-    },
-    messageText: {
-        color: '#FFFFFF',
-        fontSize: 15,
-    },
-    liveText: {
-        color: '#A78BFA',
-        fontSize: 15,
-        marginTop: 10,
-    },
-    error: {
-        color: '#F87171',
-        textAlign: 'center',
-        marginBottom: 10,
-    },
-    controls: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 25,
-    },
-    button: {
-        backgroundColor: '#25263A',
-        paddingHorizontal: 20,
-        paddingVertical: 14,
-        borderRadius: 30,
-    },
-    micButton: {
-        backgroundColor: '#6941C6',
-        paddingHorizontal: 30,
-        paddingVertical: 18,
-        borderRadius: 40,
-    },
-    buttonText: {
-        color: '#FFFFFF',
-        fontWeight: '600',
-    },
-});

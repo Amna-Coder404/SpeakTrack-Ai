@@ -1,41 +1,107 @@
+
 import { Redirect, Tabs } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '@clerk/expo';
 import { Ionicons } from '@expo/vector-icons';
 
 import useSyncUser from '../../hooks/useSyncUser';
-import { colors } from '../../lib/theme';
+import { colors, fonts } from '../../lib/theme';
 
-const icon = (on, off) =>
-    function TabIcon({ focused, color, size }) {
-        return <Ionicons name={focused ? on : off} size={size} color={color} />;
-    };
+const tabIcons = {
+    home: ['home', 'home-outline'],
+    progress: ['stats-chart', 'stats-chart-outline'],
+    profile: ['person', 'person-outline'],
+};
+
+function TabIcon({ name, focused, color, size }) {
+    const [activeIcon, inactiveIcon] = tabIcons[name];
+
+    return (
+        <Ionicons
+            name={focused ? activeIcon : inactiveIcon}
+            size={size}
+            color={color}
+        />
+    );
+}
 
 export default function TabsLayout() {
     const { isLoaded, isSignedIn } = useAuth();
+
     useSyncUser();
 
     if (!isLoaded) return null;
-    if (!isSignedIn) return <Redirect href="/welcome" />;
+
+    if (!isSignedIn) {
+        return <Redirect href="/welcome" />;
+    }
 
     return (
         <>
             <StatusBar style="dark" />
+
             <Tabs
                 screenOptions={{
                     headerShown: false,
-                    tabBarActiveTintColor: colors.text,
+
+                    tabBarActiveTintColor: colors.primary,
                     tabBarInactiveTintColor: colors.muted,
-                    tabBarStyle: { backgroundColor: colors.cream, borderTopColor: colors.border },
-                    tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+
+                    tabBarStyle: {
+                        backgroundColor: colors.tabBar,
+                        borderTopColor: colors.tabBorder,
+                        borderTopWidth: 1,
+                        height: 68,
+                        paddingTop: 8,
+                        paddingBottom: 8,
+                        elevation: 0,
+                        shadowOpacity: 0,
+                    },
+
+                    tabBarLabelStyle: {
+                        fontSize: 11,
+                        fontFamily: fonts.medium,
+                        fontWeight: '600',
+                    },
+
+                    tabBarIconStyle: {
+                        marginBottom: 2,
+                    },
+
+                    tabBarItemStyle: {
+                        paddingVertical: 2,
+                    },
                 }}
             >
-                <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: icon('home', 'home-outline') }} />
+                <Tabs.Screen
+                    name="home"
+                    options={{
+                        title: 'Home',
+                        tabBarIcon: (props) => (
+                            <TabIcon name="home" {...props} />
+                        ),
+                    }}
+                />
+
                 <Tabs.Screen
                     name="progress"
-                    options={{ title: 'Progress', tabBarIcon: icon('stats-chart', 'stats-chart-outline') }}
+                    options={{
+                        title: 'Progress',
+                        tabBarIcon: (props) => (
+                            <TabIcon name="progress" {...props} />
+                        ),
+                    }}
                 />
-                <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: icon('person', 'person-outline') }} />
+
+                <Tabs.Screen
+                    name="profile"
+                    options={{
+                        title: 'Profile',
+                        tabBarIcon: (props) => (
+                            <TabIcon name="profile" {...props} />
+                        ),
+                    }}
+                />
             </Tabs>
         </>
     );

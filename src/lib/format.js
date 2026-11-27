@@ -25,12 +25,38 @@ export const fullDate = (date) => {
     });
 };
 
-export const minutesLabel = (minutes = 0) => {
-    return `${minutes} min`;
+
+export const minutesLabel = (seconds = 0) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+
+    if (minutes > 0) {
+        return `${minutes}m ${remainingSeconds}s`;
+    }
+
+    return `${remainingSeconds}s`;
 };
 
+
 export const totalLabel = (total = 0) => {
-    return `${total}`;
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+
+    if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+    }
+
+    return `${seconds}s`;
 };
 
 export const whenLabel = (date) => {

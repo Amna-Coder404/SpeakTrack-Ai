@@ -1,9 +1,10 @@
-
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
+import { router } from 'expo-router';
 import { useAuth } from '@clerk/expo';
 import { useAction, useConvexAuth, useQuery } from 'convex/react';
 import * as Speech from 'expo-speech';
+
 import {
     ExpoSpeechRecognitionModule,
     useSpeechRecognitionEvent,
@@ -21,32 +22,41 @@ export function useSpeaking() {
     const respond = useAction(api.ai.respond);
     const finishSession = useAction(api.ai.finishSession);
 
+    // UI state
     const [messages, setMessages] = useState([]);
     const [status, setStatus] = useState('starting');
     const [muted, setMuted] = useState(false);
     const [seconds, setSeconds] = useState(0);
     const [liveText, setLiveText] = useState('');
     const [error, setError] = useState('');
+    const [sessionActive, setSessionActive] = useState(false);
 
+    // Session references
     const sessionIdRef = useRef(null);
-    const statusRef = useRef('starting');
-    const mutedRef = useRef(false);
-    const endingRef = useRef(false);
-    const startingRef = useRef(false);
-    const lastTextRef = useRef('');
-    const confidenceRef = useRef(null);
     const secondsRef = useRef(0);
 
+    const statusRef = useRef('starting');
+    const mutedRef = useRef(false);
+
+    const endingRef = useRef(false);
+    const startingRef = useRef(false);
+    const processingRef = useRef(false);
+
+    const lastTextRef = useRef('');
+    const confidenceRef = useRef(null);
+
     const voiceRef = useRef('en-US');
+    const endSessionRef = useRef(null);
 
     const limitSec = (me?.sessionMinutes || 10) * 60;
 
-    // Keep refs synchronized with state
+    // Update status
     const changeStatus = useCallback((value) => {
         statusRef.current = value;
         setStatus(value);
     }, []);
 
+    // Add conversation message
     const addMessage = useCallback((role, text) => {
         setMessages((previous) => [
             ...previous,
@@ -58,37 +68,15 @@ export function useSpeaking() {
         ]);
     }, []);
 
-    // AI text-to-speech
-    const afterSpeech = useCallback(() => {
-        if (endingRef.current || statusRef.current !== 'speaking') return;
-
-        changeStatus('idle');
-
-        if (!mutedRef.current) {
-            startListening();
+    // Start microphone recognition
+    const startListening = useCallback(async () => {
+        if (
+            endingRef.current ||
+            mutedRef.current ||
+            !sessionIdRef.current
+        ) {
+            return;
         }
-    }, [changeStatus]);
-
-    const speak = useCallback((text) => {
-        if (!text || endingRef.current) return;
-
-        changeStatus('speaking');
-        Speech.stop();
-
-        Speech.speak(text, {
-            language: voiceRef.current,
-            rate: 0.95,
-            onDone: afterSpeech,
-            onError: (err) => {
-                console.log('Speech error:', err);
-                afterSpeech();
-            },
-        });
-    }, [afterSpeech, changeStatus]);
-
-    // User speech recognition
-    const startListening = async () => {
-        if (endingRef.current) return;
 
         try {
             const permission =
@@ -100,9 +88,14 @@ export function useSpeaking() {
                 return;
             }
 
+            if (endingRef.current) return;
+
             lastTextRef.current = '';
             confidenceRef.current = null;
+
             setLiveText('');
+            setError('');
+
             changeStatus('listening');
 
             ExpoSpeechRecognitionModule.start({
@@ -114,71 +107,164 @@ export function useSpeaking() {
                 },
             });
         } catch (err) {
-            console.log('Recognition error:', err);
+            console.log('Recognition start error:', err);
+
             setError('Could not start speech recognition.');
             changeStatus('idle');
         }
-    };
+    }, [changeStatus]);
 
-    // Receive recognized text
+    // AI speech completed
+    const afterSpeech = useCallback(() => {
+        console.log('afterSpeech, status =', statusRef.current); // FIX: debug log
+
+        if (
+            endingRef.current ||
+            statusRef.current !== 'speaking'
+        ) {
+            return;
+        }
+
+        changeStatus('idle');
+
+        if (!mutedRef.current) {
+            startListening();
+        }
+    }, [changeStatus, startListening]);
+
+    // AI text-to-speech
+    const speak = useCallback((text) => {
+        if (!text || endingRef.current) return;
+
+        changeStatus('speaking');
+
+        Speech.stop();
+
+        Speech.speak(text, {
+            language: voiceRef.current,
+            rate: 0.95,
+
+            onDone: afterSpeech,
+
+            onError: (err) => {
+                console.log('Speech error:', err);
+                afterSpeech();
+            },
+        });
+    }, [afterSpeech, changeStatus]);
+
+    // Get AI response
+    const getReply = useCallback(async (text, confidence) => {
+        if (!sessionIdRef.current || endingRef.current) return;
+
+        try {
+            changeStatus('thinking');
+            setError('');
+
+            const result = await respond({
+                sessionId: sessionIdRef.current,
+                text,
+                ...(typeof confidence === 'number'
+                    ? { confidence }
+                    : {}),
+            });
+
+            console.log('AI result:', result); // FIX: debug log
+
+            if (endingRef.current) return;
+
+            if (!result?.reply) {
+                // FIX: don't fail silently if backend returns no reply
+                setError('AI returned an empty reply.');
+                changeStatus('idle');
+                return;
+            }
+
+            addMessage('ai', result.reply);
+
+            speak(result.reply);
+        } catch (err) {
+            console.log('AI response error:', err);
+
+            if (!endingRef.current) {
+                setError('Could not get an AI response.');
+                changeStatus('idle');
+            }
+        }
+    }, [respond, addMessage, speak, changeStatus]);
+
+    // Send learner's speech
+    const sendTurn = useCallback(async (text) => {
+
+        if (
+            !text?.trim() ||
+            endingRef.current ||
+            processingRef.current
+        ) {
+            return;
+        }
+
+        processingRef.current = true;
+
+        const confidence = confidenceRef.current;
+
+        lastTextRef.current = '';
+        confidenceRef.current = null;
+
+        try {
+            changeStatus('thinking');
+            addMessage('user', text.trim());
+            setLiveText('');
+
+            await getReply(text.trim(), confidence);
+        } finally {
+            processingRef.current = false;
+        }
+    }, [addMessage, getReply]);
+
+    // Speech recognition result
     useSpeechRecognitionEvent('result', (event) => {
         const result = event.results?.[0];
 
-        if (!result) return;
+        if (!result || endingRef.current) return;
 
         const transcript = result.transcript || '';
 
         setLiveText(transcript);
 
+        // FIX: keep the latest text (final or not), so `end` always has text
+        lastTextRef.current = transcript;
+
         if (result.isFinal) {
-            lastTextRef.current = transcript;
             confidenceRef.current = result.confidence ?? null;
         }
     });
 
+    // Speech recognition error
     useSpeechRecognitionEvent('error', (event) => {
+        if (endingRef.current) return;
+
         console.log('Recognition error:', event);
+
+        if (event.error === 'no-speech') {
+            setError('No speech detected. Please try again.');
+            changeStatus('idle');
+            return;
+        }
+
+        if (event.error === 'aborted') return;
+
         setError(event.message || 'Speech recognition error.');
+        changeStatus('idle');
     });
 
-    // Send user message to AI
-    const getReply = async (text, confidence) => {
-        if (!sessionIdRef.current || endingRef.current) return;
-
-        try {
-            changeStatus('thinking');
-
-            const result = await respond({
-                sessionId: sessionIdRef.current,
-                text,
-                confidence,
-            });
-
-            if (endingRef.current) return;
-
-            addMessage('ai', result.reply);
-            speak(result.reply);
-        } catch (err) {
-            console.log('AI response error:', err);
-            setError('Could not get an AI response.');
-            changeStatus('idle');
-        }
-    };
-
-    const sendTurn = async (text) => {
-        if (!text?.trim()) return;
-
-        addMessage('user', text);
-        setLiveText('');
-
-        await getReply(text, confidenceRef.current);
-    };
-
-    // Recognition ended
+    // Recognition completed
     useSpeechRecognitionEvent('end', () => {
         if (endingRef.current) return;
 
         const text = lastTextRef.current.trim();
+
+        console.log('Recognition end, text =', text); // FIX: debug log
 
         if (text) {
             sendTurn(text);
@@ -187,33 +273,53 @@ export function useSpeaking() {
         }
     });
 
-    // Start conversation
-    const begin = async () => {
-        if (startingRef.current || sessionIdRef.current) return;
+    // Start a new conversation
+    const begin = useCallback(async () => {
+        if (
+            startingRef.current ||
+            sessionIdRef.current ||
+            endingRef.current
+        ) {
+            return;
+        }
 
         startingRef.current = true;
         endingRef.current = false;
 
         try {
             changeStatus('starting');
+            setError('');
+            setMessages([]);
+            setSeconds(0);
+            secondsRef.current = 0;
 
-            const result = await startSession({});
+            const result = await startSession({
+                topic: 'Daily Conversation',
+            });
+
+            if (endingRef.current) return;
 
             sessionIdRef.current = result.sessionId;
 
+            setSessionActive(true);
+
             addMessage('ai', result.reply);
+
             speak(result.reply);
         } catch (err) {
             console.log('Start session error:', err);
+
             setError('Could not start your speaking session.');
             changeStatus('idle');
         } finally {
             startingRef.current = false;
         }
-    };
+    }, [startSession, changeStatus, addMessage, speak]);
 
     // Microphone button
-    const handleMic = async () => {
+    const handleMic = useCallback(async () => {
+        if (endingRef.current) return;
+
         if (!sessionIdRef.current) {
             await begin();
             return;
@@ -224,31 +330,41 @@ export function useSpeaking() {
             return;
         }
 
-        if (statusRef.current === 'speaking') {
-            Speech.stop();
-            changeStatus('idle');
-            await startListening();
+        if (statusRef.current === 'thinking') {
             return;
         }
 
-        await startListening();
-    };
+        if (statusRef.current === 'speaking') {
+            Speech.stop();
+            changeStatus('idle');
+        }
 
-    // Toggle automatic listening
-    const handleMute = () => {
+        await startListening();
+    }, [begin, changeStatus, startListening]);
+
+    // Mute automatic microphone listening
+    const handleMute = useCallback(() => {
         const nextValue = !mutedRef.current;
 
         mutedRef.current = nextValue;
         setMuted(nextValue);
 
-        if (nextValue && statusRef.current === 'listening') {
-            ExpoSpeechRecognitionModule.abort();
-            changeStatus('idle');
+        if (nextValue) {
+            if (statusRef.current === 'listening') {
+                ExpoSpeechRecognitionModule.abort();
+                changeStatus('idle');
+            }
+        } else if (
+            sessionIdRef.current &&
+            statusRef.current === 'idle'
+        ) {
+            startListening();
         }
-    };
+    }, [changeStatus, startListening]);
 
-    // End session
-    const handleEnd = async () => {
+
+    // End session and open the result screen
+    const handleEnd = useCallback(async () => {
         if (endingRef.current) return;
 
         endingRef.current = true;
@@ -258,27 +374,57 @@ export function useSpeaking() {
 
         changeStatus('ending');
 
+        const sessionId = sessionIdRef.current; // save before clearing
+        let finished = false;
+
         try {
-            if (sessionIdRef.current) {
+            if (sessionId) {
                 await finishSession({
-                    sessionId: sessionIdRef.current,
+                    sessionId,
+                    durationSec: Number(secondsRef.current),
                 });
+
+                finished = true;
             }
         } catch (err) {
             console.log('Finish session error:', err);
-            Alert.alert('Error', 'Could not finish the session.');
+
+            Alert.alert(
+                'Session Error',
+                err.message || 'Could not finish your session.'
+            );
         } finally {
             sessionIdRef.current = null;
-            changeStatus('idle');
-        }
-    };
 
-    // Update selected recognition language
+            setSessionActive(false);
+            setMessages([]);
+            setLiveText('');
+            setSeconds(0);
+
+            secondsRef.current = 0;
+            changeStatus('idle');
+
+            mutedRef.current = false;
+            setMuted(false);
+
+            if (finished && sessionId) {
+                router.replace(`/result/${sessionId}`);
+            } else {
+                router.replace('/home');
+            }
+        }
+    }, [finishSession, changeStatus]);
+    // Keep end-session callback updated for the timer
+    useEffect(() => {
+        endSessionRef.current = handleEnd;
+    }, [handleEnd]);
+
+    // Update selected voice
     useEffect(() => {
         voiceRef.current = me?.voice || 'en-US';
     }, [me?.voice]);
 
-    // Auto-start session after authentication
+    // Automatically start session after authentication
     useEffect(() => {
         if (
             isSignedIn &&
@@ -289,33 +435,36 @@ export function useSpeaking() {
         ) {
             begin();
         }
-    }, [isSignedIn, isAuthenticated, me]);
+    }, [isSignedIn, isAuthenticated, me, begin]);
 
-    // Session timer
+    // Stable session timer
     useEffect(() => {
-        if (!sessionIdRef.current || status === 'ending') return;
+        if (!sessionActive) return;
 
         const interval = setInterval(() => {
-            setSeconds((previous) => {
-                const next = previous + 1;
-                secondsRef.current = next;
+            if (endingRef.current) return;
 
-                if (next >= limitSec) {
-                    clearInterval(interval);
-                    handleEnd();
-                }
+            const next = secondsRef.current + 1;
 
-                return next;
-            });
+            secondsRef.current = next;
+            setSeconds(next);
+
+            if (next >= limitSec) {
+                clearInterval(interval);
+                endSessionRef.current?.();
+            }
         }, 1000);
 
         return () => clearInterval(interval);
-    }, [sessionIdRef.current, status, limitSec]);
+    }, [sessionActive, limitSec]);
 
     // Cleanup
     useEffect(() => {
         return () => {
+            endingRef.current = true;
+
             Speech.stop();
+
             ExpoSpeechRecognitionModule.abort();
         };
     }, []);
