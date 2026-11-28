@@ -9,7 +9,7 @@ import {
 
 import { router } from 'expo-router';
 import { useUser } from '@clerk/expo';
-import { useQuery } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { FontAwesome5 } from '@expo/vector-icons';
 
 import { api } from '../../../convex/_generated/api';
@@ -28,13 +28,19 @@ import {
 
 import { todaysTopic } from '../../lib/topics';
 import styles from '../../styles/home.style';
+import { useEffect, useState } from 'react'; // add useEffect
+
 
 export default function Home() {
     const { user } = useUser();
 
     const overview = useQuery(api.sessions.overview, { days: 14 });
     const recent = useQuery(api.sessions.listRecent, { limit: 3 });
-
+    // inside Home(), after the useQuery lines:
+    const ensureProgress = useMutation(api.sessions.ensureProgress);
+    useEffect(() => {
+        ensureProgress().catch(() => { });
+    }, []);
     const topic = todaysTopic();
 
     const firstName =
@@ -160,7 +166,7 @@ export default function Home() {
                             <Text style={styles.tiny}>
                                 First session
                             </Text>
-
+                            <Text style={styles.tiny}>{whenLabel(overview.first.at)}</Text>
                             <Text style={styles.oldNumber}>
                                 {overview.first.score}
                             </Text>
@@ -184,10 +190,7 @@ export default function Home() {
                         </View>
 
                         <View style={styles.chartContainer}>
-                            <LineChart
-                                data={sparkline}
-                                width={95}
-                                height={44}
+                            <LineChart data={sparkline} width={95} height={44}
                             />
                         </View>
                     </View>
@@ -228,9 +231,7 @@ export default function Home() {
                     Recent sessions
                 </Text>
 
-                <Pressable
-                    onPress={() => router.push('/progress')}
-                >
+                <Pressable onPress={() => router.push('/sessions')}>
                     <Text style={styles.seeAll}>
                         See all
                     </Text>

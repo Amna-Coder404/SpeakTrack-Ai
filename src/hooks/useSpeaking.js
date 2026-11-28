@@ -12,6 +12,14 @@ import {
 
 import { api } from '../../convex/_generated/api';
 
+// How long silence must last before your sentence is sent (milliseconds).
+// Lower = faster reply. If it cuts you off while thinking, use 1800.
+const SILENCE_MS = 2000;
+
+// Shared by every instance of the hook, so a duplicate event can never send twice.
+let lastSentText = '';
+let lastSentAt = 0;
+
 export function useSpeaking() {
     const { isSignedIn } = useAuth();
     const { isAuthenticated } = useConvexAuth();
@@ -103,7 +111,8 @@ export function useSpeaking() {
                 interimResults: true,
                 continuous: false,
                 androidIntentOptions: {
-                    EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 3000,
+                    EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: SILENCE_MS,
+                    EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: SILENCE_MS,
                 },
             });
         } catch (err) {
@@ -116,7 +125,7 @@ export function useSpeaking() {
 
     // AI speech completed
     const afterSpeech = useCallback(() => {
-        console.log('afterSpeech, status =', statusRef.current); // FIX: debug log
+        console.log('afterSpeech, status =', statusRef.current);
 
         if (
             endingRef.current ||
@@ -169,12 +178,11 @@ export function useSpeaking() {
                     : {}),
             });
 
-            console.log('AI result:', result); // FIX: debug log
+            console.log('AI result:', result);
 
             if (endingRef.current) return;
 
             if (!result?.reply) {
-                // FIX: don't fail silently if backend returns no reply
                 setError('AI returned an empty reply.');
                 changeStatus('idle');
                 return;
@@ -195,7 +203,6 @@ export function useSpeaking() {
 
     // Send learner's speech
     const sendTurn = useCallback(async (text) => {
-
         if (
             !text?.trim() ||
             endingRef.current ||
@@ -203,6 +210,13 @@ export function useSpeaking() {
         ) {
             return;
         }
+
+        // Ignore a duplicate of the same sentence sent a moment ago.
+        const clean = text.trim();
+        const now = Date.now();
+        if (clean === lastSentText && now - lastSentAt < 3000) return;
+        lastSentText = clean;
+        lastSentAt = now;
 
         processingRef.current = true;
 
@@ -213,14 +227,14 @@ export function useSpeaking() {
 
         try {
             changeStatus('thinking');
-            addMessage('user', text.trim());
+            addMessage('user', clean);
             setLiveText('');
 
-            await getReply(text.trim(), confidence);
+            await getReply(clean, confidence);
         } finally {
             processingRef.current = false;
         }
-    }, [addMessage, getReply]);
+    }, [addMessage, getReply, changeStatus]);
 
     // Speech recognition result
     useSpeechRecognitionEvent('result', (event) => {
@@ -232,7 +246,7 @@ export function useSpeaking() {
 
         setLiveText(transcript);
 
-        // FIX: keep the latest text (final or not), so `end` always has text
+        // Keep the latest text (final or not), so `end` always has text
         lastTextRef.current = transcript;
 
         if (result.isFinal) {
@@ -263,8 +277,9 @@ export function useSpeaking() {
         if (endingRef.current) return;
 
         const text = lastTextRef.current.trim();
+        lastTextRef.current = ''; // a second 'end' event will now find nothing
 
-        console.log('Recognition end, text =', text); // FIX: debug log
+        console.log('Recognition end, text =', text);
 
         if (text) {
             sendTurn(text);
@@ -362,7 +377,6 @@ export function useSpeaking() {
         }
     }, [changeStatus, startListening]);
 
-
     // End session and open the result screen
     const handleEnd = useCallback(async () => {
         if (endingRef.current) return;
@@ -414,6 +428,7 @@ export function useSpeaking() {
             }
         }
     }, [finishSession, changeStatus]);
+
     // Keep end-session callback updated for the timer
     useEffect(() => {
         endSessionRef.current = handleEnd;

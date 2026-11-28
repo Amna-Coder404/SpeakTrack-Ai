@@ -19,6 +19,48 @@ const CATEGORIES = [
     'Other',
 ];
 
+const DAY = 24 * 60 * 60 * 1000;
+
+const NO_HISTORY =
+    'Learner history: no finished session yet, so there is no score and no start date. Never invent any.';
+
+// Builds the learner history text that is given to the AI partner.
+// It includes when the learner started, first score, latest score and the improvement.
+const historyLine = (user) => {
+    const p = user?.progress;
+    if (!p) return NO_HISTORY;
+
+    const weak = (p.weakAreas ?? [])
+        .filter((w) => w.category !== 'Other')
+        .slice(0, 3)
+        .map((w) => w.category)
+        .join(', ');
+
+    const days = Math.floor((Date.now() - p.firstAt) / DAY);
+    const startedAgo = days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+    const startDate = new Date(p.firstAt).toDateString();
+
+    let change = 'Only one session so far, so improvement cannot be measured yet.';
+    if (p.sessionsDone >= 2) {
+        const diff = p.latestScore - p.firstScore;
+        change =
+            diff > 0
+                ? `Improvement: +${diff} points since the first session.`
+                : diff < 0
+                    ? `Score is ${Math.abs(diff)} points lower than the first session.`
+                    : 'Score is the same as the first session.';
+    }
+
+    return [
+        `Learner history: started ${startedAgo} (${startDate}).`,
+        `First score: ${p.firstScore}/100. Latest score: ${p.latestScore}/100. Sessions done: ${p.sessionsDone}.`,
+        change,
+        weak ? `Most common mistakes: ${weak}.` : '',
+    ]
+        .filter(Boolean)
+        .join(' ');
+};
+
 /* ---------------------------- helpers ---------------------------- */
 
 const requireClerkId = async (ctx) => {
@@ -29,8 +71,7 @@ const requireClerkId = async (ctx) => {
     return identity.subject;
 };
 
-
-const callGemini = async ({ model, system, contents, json = false, maxOutputTokens = 180, }) => {
+const callGemini = async ({ model, system, contents, json = false, maxOutputTokens = 180 }) => {
     const key = process.env.GEMINI_API_KEY;
 
     if (!key) {
@@ -41,9 +82,7 @@ const callGemini = async ({ model, system, contents, json = false, maxOutputToke
         model,
         process.env.GEMINI_BACKUP_MODEL_1 || 'gemini-3.5-flash-lite',
         process.env.GEMINI_BACKUP_MODEL_2 || 'gemini-3.8-flash',
-    ].filter((value, index, array) =>
-        value && array.indexOf(value) === index
-    );
+    ].filter((value, index, array) => value && array.indexOf(value) === index);
 
     let lastError;
 
@@ -64,9 +103,7 @@ const callGemini = async ({ model, system, contents, json = false, maxOutputToke
                         contents,
                         generationConfig: {
                             maxOutputTokens,
-                            ...(json
-                                ? { responseMimeType: 'application/json' }
-                                : {}),
+                            ...(json ? { responseMimeType: 'application/json' } : {}),
                         },
                     }),
                 }
@@ -74,15 +111,11 @@ const callGemini = async ({ model, system, contents, json = false, maxOutputToke
 
             if (!res.ok) {
                 const body = await res.text();
-                lastError = new Error(
-                    `${currentModel} (${res.status}): ${body.slice(0, 200)}`
-                );
+                lastError = new Error(`${currentModel} (${res.status}): ${body.slice(0, 200)}`);
 
                 // Try another model for unavailable, overloaded,
                 // rate-limited, or server-error responses.
-                if (
-                    [404, 408, 429, 500, 502, 503, 504].includes(res.status)
-                ) {
+                if ([404, 408, 429, 500, 502, 503, 504].includes(res.status)) {
                     continue;
                 }
 
@@ -115,12 +148,10 @@ const callGemini = async ({ model, system, contents, json = false, maxOutputToke
         }
     }
 
-    throw new Error(
-        `All Gemini models failed. ${lastError?.message || 'Unknown error'}`
-    );
+    throw new Error(`All Gemini models failed. ${lastError?.message || 'Unknown error'}`);
 };
 
-// Gemini ke JSON response ko JavaScript object mein convert karta hai.
+// Converts Gemini's JSON response into a JavaScript object.
 const parseJson = (raw) => {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
     try {
@@ -131,27 +162,46 @@ const parseJson = (raw) => {
         if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));
         throw new Error('Could not read the analysis from Gemini');
     }
-}
+};
 
-const partnerSystem = ({ name, level, topic }) => {
+const partnerSystem = ({ name, level, topic, history }) => {
     return [
         'You are a warm, patient English speaking coach inside the SpeakTrack app.',
         `The learner is ${name}. Their level is ${level}. Today's topic: "${topic}".`,
-        'Rules:',
-        '- The learner message comes from speech-to-text. IGNORE capitalization, punctuation and spelling.',
-        '- Some words may be misheard by the recognizer (nonsense words). Guess the intended meaning from context and do NOT treat those as the learner mistakes.',
-        '- If the learner made real mistakes: start with You should say: and then give the corrected version of their WHOLE message. Fix ALL real grammar, word choice and sentence mistakes, keep their meaning, and keep it natural. If their message is very long, correct the first 3 or 4 sentences only.',
+        history || NO_HISTORY,
+        '',
+        'Every learner message comes from speech-to-text. IGNORE capitalization, punctuation and spelling. Some words may be misheard: guess the meaning from context and do not treat those as mistakes.',
+        '',
+        'STEP 1 - Decide the type of message:',
+        'A) The learner asks YOU a question (about their progress, score, start date, level, or anything else).',
+        'B) The learner just talks or answers your question.',
+        '',
+        'If the message is type A, ALWAYS do both parts, in this order:',
+        '1. Correction: only if they made a real mistake, say ONE short line like "You can ask: ..." (vary the opening). If there is no real mistake, or they said "do not correct", skip this part.',
+        '2. Answer: ALWAYS answer the question completely in 2 to 4 short sentences. Never skip the answer. Never replace the answer with a follow-up question or with praise.',
+        'Then end with ONE short follow-up question (maximum 12 words).',
+        '',
+        'If the message is type B:',
+        '- If there is a real mistake, give the corrected version (vary the opening: "Nice try! You can say: ...", "Almost! A better way is: ...", "Small fix: ..."). Never use the same opening twice in a row. Keep it light for tiny mistakes.',
+        '- If there is no mistake, praise in a few words and ask ONE simple follow-up question (maximum 12 words).',
+        '',
+        'PROGRESS QUESTIONS (when started, score, improvement, level):',
+        '- Use ONLY the learner history above. Say when they started, their first score, their latest score and the improvement.',
+        '- If the history says there is no finished session yet, say clearly that they started today, that the score will appear after they finish this session, and encourage them. Do NOT invent dates, topics, scores or weeks.',
+        '- Mention one area to practice only if the history lists one.',
+        '',
+        'Other rules:',
+        '- Adapt to the learner level. For Beginner (A2): very simple words, very short sentences, easy questions. For Intermediate (B1): everyday words and normal questions. For Upper-intermediate (B2): richer vocabulary and opinion questions. For Advanced (C1): natural, idiomatic English and deeper questions. Corrections should match the level too: do not correct small style choices for beginners, but be stricter for advanced learners.',
         '- Do not explain grammar rules.',
-        '- After the correction, add ONE short follow-up question (maximum 12 words).',
-        '- If there is NO mistake: reply in one short sentence and ask ONE simple follow-up question.',
+        '- Use the history quietly otherwise. Do not read out scores unless asked.',
         '- Plain spoken English only: no markdown, no emojis, no lists, no stage directions.',
-        '- If their message is unclear, kindly ask them to say it again.',
+        '- If the message is really unclear, kindly ask them to say it again.',
     ].join('\n');
 };
 
 function openingText({ name, topic }) {
     return `[Session start] Greet ${name} in one short sentence, then ask your first question about "${topic}".`;
-};
+}
 
 function toContents(opening, messages) {
     const contents = [{ role: 'user', parts: [{ text: opening }] }];
@@ -180,9 +230,9 @@ export const startSession = action({
 
         const reply = await callGemini({
             model: process.env.GEMINI_MODEL || DEFAULT_MODEL,
-            system: partnerSystem({ name, level, topic }),
+            system: partnerSystem({ name, level, topic, history: historyLine(user) }),
             contents: [{ role: 'user', parts: [{ text: openingText({ name, topic }) }] }],
-            maxOutputTokens: 250,
+            maxOutputTokens: 500,
         });
 
         await ctx.runMutation(internal.sessions.addMessage, { sessionId, clerkId, role: 'ai', text: reply });
@@ -222,9 +272,14 @@ export const respond = action({
         const name = firstName(user);
         const reply = await callGemini({
             model: process.env.GEMINI_MODEL || DEFAULT_MODEL,
-            system: partnerSystem({ name, level: user?.level || 'Intermediate (B1)', topic: session.topic }),
+            system: partnerSystem({
+                name,
+                level: user?.level || 'Intermediate (B1)',
+                topic: session.topic,
+                history: historyLine(user),
+            }),
             contents: toContents(openingText({ name, topic: session.topic }), messages),
-            maxOutputTokens: 512,
+            maxOutputTokens: 1500,
         });
 
         await ctx.runMutation(internal.sessions.addMessage, { sessionId, clerkId, role: 'ai', text: reply });

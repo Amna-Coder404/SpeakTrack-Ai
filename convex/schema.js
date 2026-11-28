@@ -11,9 +11,19 @@ export default defineSchema({
         updatedAt: v.optional(v.float64()),
         // profile settings
         level: v.optional(v.string()),
-        voice: v.optional(v.string()), // 'en-US' | 'en-GB'
+        voice: v.optional(v.string()), // 'en-US' | 'en-GB' (or a phone voice id)
         sessionMinutes: v.optional(v.float64()),
         saveTranscripts: v.optional(v.boolean()),
+        // summary of the learner's journey: stays even if session cards are deleted
+        progress: v.optional(
+            v.object({
+                firstScore: v.number(),
+                firstAt: v.number(),
+                latestScore: v.number(),
+                sessionsDone: v.number(),
+                weakAreas: v.array(v.object({ category: v.string(), count: v.number() })),
+            })
+        ),
     }).index('by_clerk_id', ['clerkId']),
 
     sessions: defineTable({
@@ -42,6 +52,8 @@ export default defineSchema({
             })
         ),
         newWords: v.optional(v.array(v.string())),
+        // true = card deleted from the list, but the record still counts in progress
+        hidden: v.optional(v.boolean()),
     }).index('by_clerk', ['clerkId', 'startedAt']),
 
     transcripts: defineTable({

@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { internalMutation, internalQuery, query } from './_generated/server';
+import { internalMutation, internalQuery, mutation, query } from './_generated/server';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -19,6 +19,25 @@ async function ownedSession(ctx, sessionId, clerkId) {
     return session;
 }
 
+async function completedSessions(ctx, clerkId, order) {
+    const all = await ctx.db
+        .query('sessions')
+        .withIndex('by_clerk', (q) => q.eq('clerkId', clerkId))
+        .order(order)
+        .take(1000);
+    return all.filter((s) => s.status === 'completed');
+}
+// "Deleting" a session only hides its card. Scores, progress, corrections and words stay.
+// Only the saved chat messages are removed.
+async function hideSession(ctx, sessionId) {
+    const msgs = await ctx.db
+        .query('transcripts')
+        .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
+        .collect();
+    for (const m of msgs) await ctx.db.delete(m._id);
+
+    await ctx.db.patch(sessionId, { hidden: true });
+}
 /* ------------------------------------------------------------------ */
 /* Internal functions (called only from convex/ai.js)                  */
 /* ------------------------------------------------------------------ */
@@ -142,19 +161,64 @@ export const saveResult = internalMutation({
             newWords: words,
         });
 
+        const savedCategories = [];
         const corrections = Array.isArray(result?.corrections) ? result.corrections : [];
         for (const c of corrections.slice(0, 12)) {
             const original = text(c?.original, 300);
             const corrected = text(c?.corrected, 300);
             if (!original || !corrected || original === corrected) continue;
+            const category = text(c?.category, 40) || 'Other';
             await ctx.db.insert('corrections', {
                 sessionId,
                 clerkId,
                 original,
                 corrected,
-                category: text(c?.category, 40) || 'Other',
+                category,
                 explanation: text(c?.explanation, 160),
                 createdAt: Date.now(),
+            });
+            savedCategories.push(category);
+        }
+
+        // Progress summary: stays even if the user deletes sessions later.
+        const profileUser = await userByClerk(ctx, clerkId);
+        if (profileUser) {
+            const old = profileUser.progress;
+            const counts = new Map();
+            let firstScore = overall;
+            let firstAt = Date.now();
+            let sessionsDone = 1;
+
+            if (old) {
+                for (const w of old.weakAreas) counts.set(w.category, w.count);
+                for (const cat of savedCategories) counts.set(cat, (counts.get(cat) ?? 0) + 1);
+                firstScore = old.firstScore;
+                firstAt = old.firstAt;
+                sessionsDone = old.sessionsDone + 1;
+            } else {
+                // Existing users: build the summary from what is already saved.
+                const done = await completedSessions(ctx, clerkId, 'asc');
+                const allCorrections = await ctx.db
+                    .query('corrections')
+                    .withIndex('by_clerk', (q) => q.eq('clerkId', clerkId))
+                    .collect();
+                for (const c of allCorrections) {
+                    counts.set(c.category, (counts.get(c.category) ?? 0) + 1);
+                }
+                if (done[0]) {
+                    firstScore = done[0].overallScore ?? overall;
+                    firstAt = done[0].startedAt;
+                }
+                sessionsDone = Math.max(1, done.length);
+            }
+
+            const weakAreas = [...counts.entries()]
+                .map(([category, count]) => ({ category, count }))
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 5);
+
+            await ctx.db.patch(profileUser._id, {
+                progress: { firstScore, firstAt, latestScore: overall, sessionsDone, weakAreas },
             });
         }
 
@@ -169,15 +233,7 @@ export const saveResult = internalMutation({
             }
         }
 
-        // Respect the "Save transcripts" setting: keep scores and corrections, drop the raw chat.
-        const user = await userByClerk(ctx, clerkId);
-        if (user?.saveTranscripts === false) {
-            const msgs = await ctx.db
-                .query('transcripts')
-                .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
-                .collect();
-            for (const m of msgs) await ctx.db.delete(m._id);
-        }
+
     },
 });
 
@@ -185,35 +241,62 @@ export const saveResult = internalMutation({
 /* Public queries (used by the screens)                                */
 /* ------------------------------------------------------------------ */
 
-async function completedSessions(ctx, clerkId, order) {
-    const all = await ctx.db
-        .query('sessions')
-        .withIndex('by_clerk', (q) => q.eq('clerkId', clerkId))
-        .order(order)
-        .take(1000);
-    return all.filter((s) => s.status === 'completed');
-}
-
 export const listRecent = query({
     args: { limit: v.number() },
     handler: async (ctx, { limit }) => {
         const identity = await ctx.auth.getUserIdentity();
         if (!identity) return null;
         const done = await completedSessions(ctx, identity.subject, 'desc');
-        return done.slice(0, limit).map((s, i) => {
-            const older = done[i + 1];
-            return {
+        return done
+            .map((s, i) => ({ s, older: done[i + 1] }))
+            .filter(({ s }) => !s.hidden)
+            .slice(0, limit)
+            .map(({ s, older }) => ({
                 _id: s._id,
                 topic: s.topic,
                 startedAt: s.startedAt,
                 durationSec: s.durationSec ?? 0,
                 score: s.overallScore ?? 0,
                 delta: older ? (s.overallScore ?? 0) - (older.overallScore ?? 0) : null,
-            };
-        });
+            }));
     },
 });
+export const ensureProgress = mutation({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) return null;
+        const clerkId = identity.subject;
 
+        const user = await userByClerk(ctx, clerkId);
+        if (!user || user.progress) return null; // already saved, never overwrite
+
+        const done = await completedSessions(ctx, clerkId, 'asc'); // includes hidden
+        if (done.length === 0) return null;
+
+        const corrections = await ctx.db
+            .query('corrections')
+            .withIndex('by_clerk', (q) => q.eq('clerkId', clerkId))
+            .collect();
+        const counts = new Map();
+        for (const c of corrections) counts.set(c.category, (counts.get(c.category) ?? 0) + 1);
+        const weakAreas = [...counts.entries()]
+            .map(([category, count]) => ({ category, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 5);
+
+        await ctx.db.patch(user._id, {
+            progress: {
+                firstScore: done[0].overallScore ?? 0,
+                firstAt: done[0].startedAt,
+                latestScore: done[done.length - 1].overallScore ?? 0,
+                sessionsDone: done.length,
+                weakAreas,
+            },
+        });
+        return null;
+    },
+});
 export const overview = query({
     args: { days: v.number() },
     handler: async (ctx, { days }) => {
@@ -222,9 +305,26 @@ export const overview = query({
         const clerkId = identity.subject;
         const now = Date.now();
 
-        const done = await completedSessions(ctx, clerkId, 'asc');
-        const first = done[0];
-        const latest = done[done.length - 1];
+        const done = await completedSessions(ctx, clerkId, 'asc'); // includes hidden
+        const visible = done.filter((s) => !s.hidden);
+        const user = await userByClerk(ctx, clerkId);
+        const progress = user?.progress;
+
+        // First day: saved permanently in progress, so deleting never changes it.
+        const firstSession = done[0];
+        const first = progress
+            ? { score: progress.firstScore, at: progress.firstAt }
+            : firstSession
+                ? { score: firstSession.overallScore ?? 0, at: firstSession.startedAt }
+                : null;
+
+        // Latest: the last session still shown on screen.
+        const lastVisible = visible[visible.length - 1];
+        const latest = lastVisible
+            ? { score: lastVisible.overallScore ?? 0, at: lastVisible.startedAt }
+            : progress
+                ? { score: progress.latestScore, at: progress.firstAt }
+                : null;
 
         const vocab = await ctx.db
             .query('vocabulary')
@@ -232,7 +332,7 @@ export const overview = query({
             .collect();
 
         const since = now - days * DAY;
-        const series = done
+        const series = visible
             .filter((s) => s.startedAt >= since)
             .map((s) => ({ at: s.startedAt, score: s.overallScore ?? 0 }));
 
@@ -243,7 +343,7 @@ export const overview = query({
                 .query('corrections')
                 .withIndex('by_clerk', (q) => q.eq('clerkId', clerkId))
                 .collect();
-            const firstEnd = first.startedAt + 7 * DAY;
+            const firstEnd = first.at + 7 * DAY;
             const recentStart = now - 7 * DAY;
             const map = new Map();
             for (const c of corrections) {
@@ -263,9 +363,9 @@ export const overview = query({
             count: done.length,
             totalSec: done.reduce((sum, s) => sum + (s.durationSec ?? 0), 0),
             newWords: vocab.length,
-            first: first ? { score: first.overallScore ?? 0, at: first.startedAt } : null,
-            latest: latest ? { score: latest.overallScore ?? 0, at: latest.startedAt } : null,
-            delta: first && latest ? (latest.overallScore ?? 0) - (first.overallScore ?? 0) : null,
+            first,
+            latest,
+            delta: first && latest ? latest.score - first.score : null,
             series,
             mistakes,
         };
@@ -274,10 +374,8 @@ export const overview = query({
 
 export const get = query({
     args: { sessionId: v.id('sessions') },
-
     handler: async (ctx, { sessionId }) => {
         const identity = await ctx.auth.getUserIdentity();
-
         if (!identity) return null;
 
         const session = await ctx.db.get(sessionId);
@@ -302,5 +400,41 @@ export const get = query({
             corrections,
             delta: previous ? (session.overallScore ?? 0) - (previous.overallScore ?? 0) : null,
         };
+    },
+});
+
+/* ------------------------------------------------------------------ */
+/* Delete sessions (used by the All sessions screen)                   */
+/* ------------------------------------------------------------------ */
+
+export const deleteSession = mutation({
+    args: { sessionId: v.id('sessions') },
+    handler: async (ctx, { sessionId }) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error('User is not authenticated');
+
+        const session = await ctx.db.get(sessionId);
+        if (!session || session.clerkId !== identity.subject) {
+            throw new Error('Session not found');
+        }
+        await hideSession(ctx, sessionId);
+        return { success: true };
+    },
+});
+
+export const deleteSessions = mutation({
+    args: { sessionIds: v.array(v.id('sessions')) },
+    handler: async (ctx, { sessionIds }) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error('User is not authenticated');
+
+        let deleted = 0;
+        for (const sessionId of sessionIds) {
+            const session = await ctx.db.get(sessionId);
+            if (!session || session.clerkId !== identity.subject) continue;
+            await hideSession(ctx, sessionId);
+            deleted += 1;
+        }
+        return { deleted };
     },
 });

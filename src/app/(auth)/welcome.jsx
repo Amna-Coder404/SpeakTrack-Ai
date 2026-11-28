@@ -8,6 +8,7 @@ import { useSSO } from '@clerk/expo';
 
 import Orb from '../../components/Orb';
 import { colors, fonts } from '../../lib/theme';
+import { s } from '../../styles/auth.style';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -100,14 +101,7 @@ export default function WelcomeScreen() {
                         </>
                     )}
                 </Pressable>
-
-                <Pressable
-                    style={({ pressed }) => [s.secondary, pressed && s.pressed, loading && s.disabled]}
-                    onPress={signInWithGoogle}
-                    disabled={loading}
-                >
-                    <Text style={s.secondaryText}>I already have an account</Text>
-                </Pressable>
+                <View style={{ height: 19 }} />
 
                 <Text style={s.terms}>By continuing you agree to the Terms & Privacy Policy</Text>
             </View>
@@ -115,68 +109,3 @@ export default function WelcomeScreen() {
     );
 }
 
-const s = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.dark,
-        paddingHorizontal: 24,
-        paddingTop: 64,
-        paddingBottom: 34,
-        justifyContent: 'space-between',
-    },
-    brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    bars: { flexDirection: 'row', alignItems: 'center', gap: 2.5 },
-    bar: { width: 3.5, borderRadius: 2, backgroundColor: colors.accent },
-    brand: { color: colors.onDark, fontSize: 18, fontWeight: '700' },
-    orbWrap: { alignItems: 'center', marginTop: 10 },
-    headline: {
-        fontFamily: fonts.serif,
-        fontSize: 54,
-        lineHeight: 54,
-        color: colors.onDark,
-    },
-    headlineAccent: { fontFamily: fonts.serifItalic, color: colors.accent },
-    sub: {
-        color: colors.mutedOnDark,
-        fontSize: 15,
-        lineHeight: 22,
-        marginTop: 14,
-        marginBottom: 22,
-        maxWidth: 300,
-    },
-    error: { color: '#FF8E7A', fontSize: 13, marginBottom: 12 },
-    primary: {
-        backgroundColor: colors.onDark,
-        borderRadius: 16,
-        height: 54,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-    },
-    gBadge: {
-        width: 22,
-        height: 22,
-        borderRadius: 11,
-        backgroundColor: '#FFFFFF',
-        borderWidth: 1,
-        borderColor: '#DADCE0',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    gText: { color: '#4285F4', fontWeight: '800', fontSize: 14 },
-    primaryText: { color: colors.dark, fontSize: 16, fontWeight: '700' },
-    secondary: {
-        marginTop: 10,
-        height: 54,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: colors.darkBorder,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    secondaryText: { color: colors.onDark, fontSize: 15, fontWeight: '600' },
-    terms: { color: colors.mutedOnDark, fontSize: 11.5, textAlign: 'center', marginTop: 16 },
-    pressed: { opacity: 0.85 },
-    disabled: { opacity: 0.6 },
-})
